@@ -59,11 +59,11 @@ class NhentaiExtractor:
         return result
 
 
-def extract_metadata(url: str, html: str) -> dict:
+def extract_metadata(url: str, html: str, scraper_code: str = None) -> dict:
     parsed = urlparse(url)
     domain = parsed.netloc.lower()
 
-    if "nhentai.net" in domain or "nhentai.com" in domain or "nhentai.xxx" in domain:
+    if scraper_code == "NHENTAI" or "nhentai.net" in domain or "nhentai.com" in domain or "nhentai.xxx" in domain:
         return NhentaiExtractor().extract(html)
 
     return NhentaiExtractor().extract(html)

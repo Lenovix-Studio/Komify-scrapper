@@ -3,6 +3,7 @@ from pydantic import BaseModel
 import httpx
 import logging
 from extractors import extract_metadata
+from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("komify_scraper")
@@ -12,6 +13,7 @@ app = FastAPI(title="Komify Scraper Service")
 
 class ScrapeRequest(BaseModel):
     url: str
+    scraper_code: Optional[str] = None
 
 
 @app.post("/api/v1/scrape")
@@ -39,7 +41,9 @@ async def trigger_scrape(request: ScrapeRequest):
                     detail=f"Failed to fetch page. Status: {response.status_code}",
                 )
 
-            metadata = extract_metadata(request.url, response.text)
+            metadata = extract_metadata(
+                request.url, response.text, request.scraper_code
+            )
 
             return {"success": True, "data": metadata}
 
