@@ -5,6 +5,8 @@ import asyncio
 import logging
 from extractors import extract_metadata
 from typing import Optional
+from fastapi import UploadFile, File
+from extractor_api import process_file_extraction
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("komify_scraper")
@@ -34,7 +36,17 @@ async def log_to_backend(
         logger.error(f"Failed to send log to backend: {e}")
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="Komify Scraper Service")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ScrapeRequest(BaseModel):
@@ -86,3 +98,9 @@ async def trigger_scrape(request: ScrapeRequest):
             )
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/extract")
+async def extract_file(file: UploadFile = File(...)):
+    logger.info(f"Extracting file: {file.filename}")
+    return await process_file_extraction(file)
