@@ -62,14 +62,22 @@ async def trigger_scrape(request: ScrapeRequest):
 
     try:
         cookies = {}
-        if "e-hentai.org" in request.url:
+        if "e-hentai.org" in request.url or "nhentai" in request.url:
             cookies["nw"] = "1"
 
-        async with httpx.AsyncClient(timeout=30.0, cookies=cookies) as client:
+        from urllib.parse import urlparse
+
+        parsed_url = urlparse(request.url)
+        referer = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+
+        async with httpx.AsyncClient(
+            timeout=30.0, cookies=cookies, follow_redirects=True
+        ) as client:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Referer": referer,
             }
             response = await client.get(request.url, headers=headers)
 
