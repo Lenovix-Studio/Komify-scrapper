@@ -1,12 +1,38 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import httpx
+import asyncio
 import logging
 from extractors import extract_metadata
 from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("komify_scraper")
+
+import os
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:4001")
+BACKEND_LOGS_URL = f"{BACKEND_URL}/system-logs"
+
+
+async def log_to_backend(
+    level: str, message: str, stack_trace: str = None, context: dict = None
+):
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                BACKEND_LOGS_URL,
+                json={
+                    "level": level,
+                    "source": "SCRAPER",
+                    "message": message,
+                    "stack_trace": stack_trace,
+                    "context": context,
+                },
+            )
+    except Exception as e:
+        logger.error(f"Failed to send log to backend: {e}")
+
 
 app = FastAPI(title="Komify Scraper Service")
 
@@ -49,4 +75,14 @@ async def trigger_scrape(request: ScrapeRequest):
 
     except Exception as e:
         logger.error(f"Scrape failed: {str(e)}")
+        import traceback
+
+        asyncio.create_task(
+            log_to_backend(
+                "ERROR",
+                str(e),
+                traceback.format_exc(),
+                {"url": request.url, "scraper_code": request.scraper_code},
+            )
+        )
         raise HTTPException(status_code=500, detail=str(e))
