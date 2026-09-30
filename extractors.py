@@ -123,8 +123,6 @@ class Hentai2ReadExtractor:
             elif "character" in label:
                 result["characters"].extend(values)
                 result["characters"] = list(dict.fromkeys(result["characters"]))
-            elif "storyline" in label or "alternative" in label:
-                result["alternative_title"] = ", ".join(values) if values else ""
 
         if not result["groups"] and result["artists"]:
             result["groups"] = list(result["artists"])
@@ -132,8 +130,65 @@ class Hentai2ReadExtractor:
         return result
 
 
+class ImhentaiExtractor:
+    """Handles imhentai.xxx"""
+
+    def extract(self, html: str) -> dict:
+        soup = BeautifulSoup(html, "html.parser")
+        result = {
+            "title": "",
+            "alternative_title": "",
+            "parodies": [],
+            "characters": [],
+            "tags": [],
+            "artists": [],
+            "groups": [],
+        }
+
+        h1 = soup.select_one("h1")
+        if h1:
+            result["title"] = h1.get_text(strip=True)
+
+        h2 = soup.select_one("p.subtitle, h2")
+        if h2:
+            result["alternative_title"] = h2.get_text(strip=True)
+
+        for row in soup.select(".galleries_info"):
+            label_span = row.select_one(".tags_text")
+            if not label_span:
+                continue
+            label = label_span.get_text(strip=True).lower().rstrip(":")
+
+            vals = []
+            for a in row.select("a.tag"):
+                span = a.select_one(".split_tag")
+                if span:
+                    span.decompose()
+                badge = a.select_one(".badge")
+                if badge:
+                    badge.decompose()
+                val = a.get_text(strip=True)
+                if val:
+                    vals.append(val)
+
+            if "parod" in label or "series" in label:
+                result["parodies"] = vals
+            elif "character" in label:
+                result["characters"] = vals
+            elif "tag" in label:
+                result["tags"] = vals
+            elif "artist" in label:
+                result["artists"] = vals
+            elif "group" in label:
+                result["groups"] = (
+                    [v for v in vals if v.lower() != "group"] if len(vals) > 1 else vals
+                )
+
+        return result
+
+
 class DoujindesuExtractor:
-    """Handles doujindesu.tv"""
+    """Handles doujindesu.tv and doujin.desu.xxx SPA"""
 
     def extract(self, html: str) -> dict:
         soup = BeautifulSoup(html, "html.parser")
@@ -164,21 +219,42 @@ class DoujindesuExtractor:
                 values = [
                     v.strip() for v in row.get_text(strip=True).split(",") if v.strip()
                 ]
+            self._map_values(result, label, values)
 
-            if "author" in label or "artist" in label:
-                result["artists"] = values
-            elif "group" in label or "circle" in label:
-                result["groups"] = values
-            elif "parody" in label or "series" in label or "parodi" in label:
-                result["parodies"] = values
-            elif "genre" in label or "tag" in label:
-                result["tags"] = values
-            elif "character" in label or "karakter" in label:
-                result["characters"] = values
-            elif "alternative" in label or "judul" in label:
-                result["alternative_title"] = ", ".join(values) if values else ""
+        if not result["tags"]:
+            for el in soup.select("span, h3"):
+                t = el.get_text(strip=True).lower()
+                if t in [
+                    "alternative titles",
+                    "series",
+                    "characters",
+                    "genres",
+                    "authors",
+                    "groups",
+                ]:
+                    parent = el.parent
+                    if not parent:
+                        continue
+                    vals = [tag.get_text(strip=True) for tag in parent.select("a, p")]
+                    self._map_values(result, t, vals)
 
         return result
+
+    def _map_values(self, result, label, values):
+        if "author" in label or "artist" in label:
+            result["artists"] = values
+        elif "group" in label or "circle" in label:
+            result["groups"] = values
+        elif "parody" in label or "series" in label or "parodi" in label:
+            result["parodies"] = values
+        elif "genre" in label or "tag" in label:
+            result["tags"] = values
+        elif "character" in label or "karakter" in label:
+            result["characters"] = values
+        elif (
+            "alternative" in label or "judul" in label or "alternative titles" in label
+        ):
+            result["alternative_title"] = ", ".join(values) if values else ""
 
 
 class HentaiNameExtractor:
@@ -209,15 +285,15 @@ class HentaiNameExtractor:
             values = [a.get_text(strip=True) for a in links] if links else []
 
             if "author" in label or "artist" in label:
-                result["artists"] = values
+                result["artists"].extend(values)
             elif "group" in label or "circle" in label:
-                result["groups"] = values
+                result["groups"].extend(values)
             elif "parody" in label or "series" in label:
                 result["parodies"] = values
             elif "tag" in label or "genre" in label:
                 result["tags"] = values
             elif "character" in label:
-                result["characters"] = values
+                result["characters"].extend(values)
 
         return result
 
@@ -241,35 +317,47 @@ class HentaieraExtractor:
         if h1:
             result["title"] = h1.get_text(strip=True)
 
-        for row in soup.select(".gallery-info tr, .info-row, .tag-row, .meta-row"):
-            cells = row.select("td, th")
-            if len(cells) < 2:
+        subtitle = soup.select_one("p.subtitle")
+        if subtitle:
+            result["alternative_title"] = subtitle.get_text(strip=True)
+
+        for li in soup.select("ul.galleries_info li, ul.gallery-meta li, .meta li"):
+            label_tag = li.select_one(".tags_text, .label, b, strong")
+            if not label_tag:
                 continue
-            label = cells[0].get_text(strip=True).lower().rstrip(":")
-            values = [a.get_text(strip=True) for a in cells[1].select("a")]
-            if not values:
-                values = [
-                    v.strip()
-                    for v in cells[1].get_text(strip=True).split(",")
-                    if v.strip()
-                ]
+            label = label_tag.get_text(strip=True).lower().rstrip(":")
+
+            values = []
+            for a in li.select(".info_tags a, a.tag, a"):
+                name_span = a.select_one(".item_name")
+                if name_span:
+                    v = name_span.get_text(strip=True)
+                else:
+                    v = a.get_text(strip=True)
+
+                if v and v.lower() != label:
+                    values.append(v)
+
+            values = list(dict.fromkeys(values))
 
             if "author" in label or "artist" in label:
                 result["artists"] = values
             elif "group" in label or "circle" in label:
                 result["groups"] = values
-            elif "parody" in label or "series" in label:
-                result["parodies"] = values
-            elif "tag" in label or "genre" in label:
-                result["tags"] = values
+            elif "parod" in label or "series" in label:
+                result["parodies"].extend(values)
+            elif "tag" in label or "genre" in label or "categor" in label:
+                result["tags"].extend(values)
             elif "character" in label:
                 result["characters"] = values
 
+        for k in ["artists", "groups", "parodies", "tags", "characters"]:
+            result[k] = list(dict.fromkeys(result[k]))
         return result
 
 
 class HitomiExtractor:
-    """Handles hitomi.la - NOTE: hitomi.la loads content via JS/WASM, HTML may be minimal"""
+    """Handles hitomi.la"""
 
     def extract(self, html: str) -> dict:
         soup = BeautifulSoup(html, "html.parser")
@@ -283,20 +371,32 @@ class HitomiExtractor:
             "groups": [],
         }
 
-        h1 = soup.select_one("h1, .gallery-name")
-        if h1:
+        title_tag = soup.select_one("title")
+        if title_tag:
+            t = title_tag.get_text(strip=True)
+            t = t.replace(" - Hitomi.la", "").replace(" | Hitomi.la", "")
+            result["title"] = t
+
+        h1 = soup.select_one("h1#gallery-brand, .gallery-brand a")
+        if h1 and h1.get_text(strip=True):
             result["title"] = h1.get_text(strip=True)
+
+        for h2 in soup.select("h2"):
+            a_tags = h2.select("a")
+            for a in a_tags:
+                result["artists"].append(a.get_text(strip=True))
 
         for row in soup.select(".gallery-info tr"):
             cells = row.select("td")
             if len(cells) < 2:
                 continue
             label = cells[0].get_text(strip=True).lower()
-            values = [a.get_text(strip=True) for a in cells[1].select("a")]
+            values = [
+                a.get_text(strip=True).replace(" ♀", "").replace(" ♂", "")
+                for a in cells[1].select("a")
+            ]
 
-            if "artist" in label:
-                result["artists"] = values
-            elif "group" in label:
+            if "group" in label:
                 result["groups"] = values
             elif "series" in label or "parody" in label:
                 result["parodies"] = values
@@ -308,20 +408,20 @@ class HitomiExtractor:
         return result
 
 
-def extract_metadata(url: str, html: str, scraper_code: str = None) -> dict:
+def extract_metadata(url: str, html: str) -> dict:
     parsed = urlparse(url)
     domain = parsed.netloc.lower()
 
-    if scraper_code == "NHENTAI" or "nhentai" in domain:
+    if "nhentai" in domain:
         return NhentaiExtractor().extract(html)
 
     if "imhentai" in domain:
-        return NhentaiExtractor().extract(html)
+        return ImhentaiExtractor().extract(html)
 
     if "hentai2read" in domain:
         return Hentai2ReadExtractor().extract(html)
 
-    if "doujindesu" in domain:
+    if "doujindesu" in domain or "doujin.desu" in domain:
         return DoujindesuExtractor().extract(html)
 
     if "hentai.name" in domain:

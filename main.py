@@ -51,7 +51,6 @@ app.add_middleware(
 
 class ScrapeRequest(BaseModel):
     url: str
-    scraper_code: Optional[str] = None
 
 
 @app.post("/api/v1/scrape")
@@ -61,38 +60,69 @@ async def trigger_scrape(request: ScrapeRequest):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
     try:
+        from curl_cffi import requests as c_requests
+        import asyncio
+
         cookies = {}
-        if "e-hentai.org" in request.url or "nhentai" in request.url:
+        if "e-hentai.org" in request.url:
             cookies["nw"] = "1"
 
-        from urllib.parse import urlparse
+        def fetch_page():
+            if (
+                "hitomi.la" in request.url
+                or "doujindesu" in request.url
+                or "doujin.desu" in request.url
+            ):
+                try:
+                    import sys
+                    import asyncio
 
-        parsed_url = urlparse(request.url)
-        referer = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                    if sys.platform == "win32":
+                        asyncio.set_event_loop_policy(
+                            asyncio.WindowsProactorEventLoopPolicy()
+                        )
 
-        async with httpx.AsyncClient(
-            timeout=30.0, cookies=cookies, follow_redirects=True
-        ) as client:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Referer": referer,
-            }
-            response = await client.get(request.url, headers=headers)
+                    from playwright.sync_api import sync_playwright
 
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to fetch page. Status: {response.status_code}",
-                )
+                    with sync_playwright() as p:
+                        browser = p.chromium.launch(headless=True)
+                        page = browser.new_page()
+                        page.goto(request.url)
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                        html = page.content()
+                        browser.close()
 
-            metadata = extract_metadata(
-                request.url, response.text, request.scraper_code
+                    class MockResponse:
+                        status_code = 200
+                        text = html
+
+                    return MockResponse()
+                except Exception as e:
+                    import traceback
+
+                    print(f"PLAYWRIGHT ERROR: {traceback.format_exc()}")
+                    raise HTTPException(
+                        status_code=500, detail=f"Playwright failed: {repr(e)}"
+                    )
+
+            return c_requests.get(
+                request.url, cookies=cookies, timeout=30.0, impersonate="chrome"
             )
 
-            return {"success": True, "data": metadata}
+        response = await asyncio.to_thread(fetch_page)
 
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to fetch page. Status: {response.status_code}",
+            )
+
+        metadata = extract_metadata(request.url, response.text)
+
+        return {"success": True, "data": metadata}
+
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Scrape failed: {str(e)}")
         import traceback
@@ -102,7 +132,9 @@ async def trigger_scrape(request: ScrapeRequest):
                 "ERROR",
                 str(e),
                 traceback.format_exc(),
-                {"url": request.url, "scraper_code": request.scraper_code},
+                {
+                    "url": request.url,
+                },
             )
         )
         raise HTTPException(status_code=500, detail=str(e))

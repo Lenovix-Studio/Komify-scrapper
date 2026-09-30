@@ -1,6 +1,6 @@
 import base64
 import zipfile
-import fitz
+import pymupdf
 from fastapi import UploadFile, HTTPException
 import io
 
@@ -59,11 +59,11 @@ async def process_file_extraction(file: UploadFile):
 
     elif filename.endswith(".pdf"):
         try:
-            doc = fitz.open(stream=content, filetype="pdf")
+            doc = pymupdf.open(stream=content, filetype="pdf")
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
                 zoom = 2.0
-                mat = fitz.Matrix(zoom, zoom)
+                mat = pymupdf.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 img_data = pix.tobytes("jpeg")
                 base64_data = base64.b64encode(img_data).decode("utf-8")
