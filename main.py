@@ -12,9 +12,34 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("komify_scraper")
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:4001")
 BACKEND_LOGS_URL = f"{BACKEND_URL}/system-logs"
+
+# Proxy configuration (optional)
+# Set SCRAPER_PROXY for a global proxy, e.g. "http://user:pass@host:port"
+# Or per-domain overrides: SCRAPER_PROXY_NHENTAI, SCRAPER_PROXY_EHENTAI
+SCRAPER_PROXY = os.getenv("SCRAPER_PROXY", "")
+SCRAPER_PROXY_NHENTAI = os.getenv("SCRAPER_PROXY_NHENTAI", SCRAPER_PROXY)
+SCRAPER_PROXY_EHENTAI = os.getenv("SCRAPER_PROXY_EHENTAI", SCRAPER_PROXY)
+
+
+def get_proxy_for_url(url: str) -> dict:
+    """Return curl_cffi proxies dict based on URL domain."""
+    proxy = ""
+    if "nhentai" in url:
+        proxy = SCRAPER_PROXY_NHENTAI
+    elif "e-hentai" in url or "exhentai" in url:
+        proxy = SCRAPER_PROXY_EHENTAI
+    else:
+        proxy = SCRAPER_PROXY
+
+    if proxy:
+        return {"http": proxy, "https": proxy}
+    return {}
 
 
 async def log_to_backend(
@@ -61,7 +86,6 @@ async def trigger_scrape(request: ScrapeRequest):
 
     try:
         from curl_cffi import requests as c_requests
-        import asyncio
 
         cookies = {}
         if "e-hentai.org" in request.url:
@@ -106,7 +130,11 @@ async def trigger_scrape(request: ScrapeRequest):
                     )
 
             return c_requests.get(
-                request.url, cookies=cookies, timeout=30.0, impersonate="chrome"
+                request.url,
+                cookies=cookies,
+                timeout=30.0,
+                impersonate="chrome",
+                proxies=get_proxy_for_url(request.url),
             )
 
         response = await asyncio.to_thread(fetch_page)
