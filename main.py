@@ -1,49 +1,50 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
 import asyncio
 import logging
+import os
+from typing import Optional, Dict, Any
+from dotenv import load_dotenv
 from extractors import extract_metadata
-from typing import Optional
-from fastapi import UploadFile, File
 from extractor_api import process_file_extraction
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("komify_scraper")
-
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:4001")
 BACKEND_LOGS_URL = f"{BACKEND_URL}/system-logs"
 
-# Proxy configuration (optional)
-# Set SCRAPER_PROXY for a global proxy, e.g. "http://user:pass@host:port"
-# Or per-domain overrides: SCRAPER_PROXY_NHENTAI, SCRAPER_PROXY_EHENTAI
-SCRAPER_PROXY = os.getenv("SCRAPER_PROXY", "")
-SCRAPER_PROXY_NHENTAI = os.getenv("SCRAPER_PROXY_NHENTAI", SCRAPER_PROXY)
-SCRAPER_PROXY_EHENTAI = os.getenv("SCRAPER_PROXY_EHENTAI", SCRAPER_PROXY)
+# Proxy configuration & List with Country annotations
+PROXY_LIST = [
+    "http://ivjnubqy:6d13r4kefqsp@45.38.107.97:6014",  # United Kingdom (London)
+    "http://ivjnubqy:6d13r4kefqsp@64.137.96.74:6641",  # Spain (Madrid)
+    "http://ivjnubqy:6d13r4kefqsp@198.23.243.226:6361",  # United States (Los Angeles)
+    "http://ivjnubqy:6d13r4kefqsp@38.154.185.97:6370",  # United States (Piscataway)
+    "http://ivjnubqy:6d13r4kefqsp@84.247.60.125:6095",  # Poland (Warsaw)
+    "http://ivjnubqy:6d13r4kefqsp@191.96.254.138:6185",  # United States (Los Angeles)
+    "http://ivjnubqy:6d13r4kefqsp@198.46.161.42:5092",  # United States (Los Angeles)
+    "http://ivjnubqy:6d13r4kefqsp@64.137.10.153:5803",  # Germany (Frankfurt)
+    "http://ivjnubqy:6d13r4kefqsp@104.164.49.38:7693",  # United States (Santa Clara)
+    "http://ivjnubqy:6d13r4kefqsp@23.26.71.145:5628",  # United States (Orem)
+]
 
 
-def get_proxy_for_url(url: str) -> dict:
-    """Return curl_cffi proxies dict based on URL domain."""
-    proxy = ""
-    if "nhentai" in url:
-        proxy = SCRAPER_PROXY_NHENTAI
-    elif "e-hentai" in url or "exhentai" in url:
-        proxy = SCRAPER_PROXY_EHENTAI
-    else:
-        proxy = SCRAPER_PROXY
-
-    if proxy:
-        return {"http": proxy, "https": proxy}
-    return {}
+def get_proxy_dict(proxy_url: str) -> Optional[Dict[str, str]]:
+    """Return curl_cffi proxies dict or None."""
+    if proxy_url:
+        return {"http": proxy_url, "https": proxy_url}
+    return None
 
 
 async def log_to_backend(
-    level: str, message: str, stack_trace: str = None, context: dict = None
+    level: str,
+    message: str,
+    stack_trace: Optional[str] = None,
+    context: Optional[dict] = None,
 ):
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -60,8 +61,6 @@ async def log_to_backend(
     except Exception as e:
         logger.error(f"Failed to send log to backend: {e}")
 
-
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Komify Scraper Service")
 
@@ -99,7 +98,6 @@ async def trigger_scrape(request: ScrapeRequest):
             ):
                 try:
                     import sys
-                    import asyncio
 
                     if sys.platform == "win32":
                         asyncio.set_event_loop_policy(
@@ -129,12 +127,51 @@ async def trigger_scrape(request: ScrapeRequest):
                         status_code=500, detail=f"Playwright failed: {repr(e)}"
                     )
 
-            return c_requests.get(
-                request.url,
-                cookies=cookies,
-                timeout=30.0,
-                impersonate="chrome",
-                proxies=get_proxy_for_url(request.url),
+            # --- LOGIKA ROTASI PROXY OTOMATIS (FALLBACK) ---
+            last_exception = None
+
+            for current_proxy in PROXY_LIST:
+                proxy_target = current_proxy.split("@")[-1]
+                try:
+                    logger.info(f"Mencoba fetch menggunakan proxy: {proxy_target}")
+                    response = c_requests.get(
+                        request.url,
+                        cookies=cookies,
+                        timeout=15.0,
+                        impersonate="chrome",
+                        proxies=get_proxy_dict(current_proxy),  # type: ignore
+                    )
+
+                    if response.status_code == 200:
+                        logger.info(f"Berhasil terhubung via proxy: {proxy_target}")
+                        return response
+
+                    if "nhentai.net" in request.url and response.status_code == 429:
+                        for mirror in ["nhentai.xxx", "nhentai.to", "nhentai.com"]:
+                            mirror_url = request.url.replace("nhentai.net", mirror)
+                            m_response = c_requests.get(
+                                mirror_url,
+                                cookies=cookies,
+                                timeout=15.0,
+                                impersonate="chrome",
+                                proxies=get_proxy_dict(current_proxy),  # type: ignore
+                            )
+                            if m_response.status_code == 200:
+                                return m_response
+
+                    logger.warning(
+                        f"Proxy {proxy_target} merespons dengan status {response.status_code}, mencoba proxy berikutnya..."
+                    )
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(
+                        f"Proxy {proxy_target} gagal/timeout: {str(e)}. Beralih ke proxy selanjutnya..."
+                    )
+                    continue
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Semua proxy gagal terhubung. Error terakhir: {str(last_exception)}",
             )
 
         response = await asyncio.to_thread(fetch_page)
